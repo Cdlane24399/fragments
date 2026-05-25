@@ -1,6 +1,6 @@
 import { Duration } from './duration'
+import { getRedis } from './kv'
 import { Ratelimit } from '@upstash/ratelimit'
-import { kv } from '@vercel/kv'
 
 export default async function ratelimit(
   key: string | null,
@@ -9,7 +9,7 @@ export default async function ratelimit(
 ) {
   if (process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN) {
     const ratelimit = new Ratelimit({
-      redis: kv,
+      redis: getRedis(),
       limiter: Ratelimit.slidingWindow(maxRequests, window),
     })
 
