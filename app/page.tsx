@@ -1,328 +1,521 @@
-'use client'
+"use client";
 
-import { AuthDialog } from '@/components/auth-dialog'
-import { Chat } from '@/components/chat'
-import { ChatInput } from '@/components/chat-input'
-import { ChatPicker } from '@/components/chat-picker'
-import { ChatSettings } from '@/components/chat-settings'
-import { NavBar } from '@/components/navbar'
-import { Preview } from '@/components/preview'
-import { RepoBanner } from '@/components/repo-banner'
-import { AuthViewType, useAuth } from '@/lib/auth'
-import { Message, toAISDKMessages, toMessageImage } from '@/lib/messages'
-import { LLMModelConfig } from '@/lib/models'
-import modelsList from '@/lib/models.json'
-import { FragmentSchema, fragmentSchema as schema } from '@/lib/schema'
-import { supabase } from '@/lib/supabase'
-import templates, { TemplateId } from '@/lib/templates'
-import { ExecutionResult } from '@/lib/types'
-import { DeepPartial } from 'ai'
-import { experimental_useObject as useObject } from '@ai-sdk/react'
-import { usePostHog } from 'posthog-js/react'
-import { SetStateAction, useEffect, useState } from 'react'
-import { useLocalStorage } from 'usehooks-ts'
+import { experimental_useObject as useObject } from "@ai-sdk/react";
+import type { DeepPartial } from "ai";
+import { usePostHog } from "posthog-js/react";
+import { useEffect, useState } from "react";
+import { useLocalStorage } from "usehooks-ts";
+import { AuthDialog } from "@/components/auth-dialog";
+import { Chat } from "@/components/chat";
+import { ChatInput } from "@/components/chat-input";
+import { ChatPicker } from "@/components/chat-picker";
+import { ChatSettings } from "@/components/chat-settings";
+import { ChatSidebar } from "@/components/chat-sidebar";
+import { NavBar } from "@/components/navbar";
+import { Preview } from "@/components/preview";
+import type { AuthViewType } from "@/lib/auth";
+import { useAuth } from "@/lib/auth";
+import {
+  type ChatSession,
+  createChatId,
+  deleteChat as deleteChatFromStorage,
+  generateChatTitle,
+  loadChats,
+  saveChat,
+} from "@/lib/chat-history";
+import type { Message } from "@/lib/messages";
+import { toAISDKMessages, toMessageImage } from "@/lib/messages";
+import { MODEL_PROVIDERS } from "@/lib/model-providers";
+import type { LLMModel, LLMModelConfig } from "@/lib/models";
+import type { FragmentSchema } from "@/lib/schema";
+import { fragmentSchema as schema } from "@/lib/schema";
+import { supabase } from "@/lib/supabase";
+import type { TemplateId } from "@/lib/templates";
+import templates from "@/lib/templates";
+import type { ExecutionResult } from "@/lib/types";
+
+type ModelsResponse = {
+	models?: LLMModel[];
+	statuses?: Array<{
+		configured?: boolean;
+		error?: string;
+	}>;
+};
 
 export default function Home() {
-  const [chatInput, setChatInput] = useLocalStorage('chat', '')
-  const [files, setFiles] = useState<File[]>([])
-  const [selectedTemplate, setSelectedTemplate] = useState<'auto' | TemplateId>(
-    'auto',
-  )
-  const [languageModel, setLanguageModel] = useLocalStorage<LLMModelConfig>(
-    'languageModel',
-    {
-      model: 'claude-3-5-sonnet-latest',
-    },
-  )
+	const [chatInput, setChatInput] = useLocalStorage("chat", "", {
+		initializeWithValue: false,
+	});
+	const [files, setFiles] = useState<File[]>([]);
+	const [selectedTemplate, setSelectedTemplate] = useState<"auto" | TemplateId>(
+		"auto",
+	);
+	const [languageModel, setLanguageModel] = useLocalStorage<LLMModelConfig>(
+		"languageModel",
+		{},
+		{ initializeWithValue: false },
+	);
+	const [providerApiKeys, setProviderApiKeys] = useLocalStorage<
+		Record<string, string>
+	>("providerApiKeys", {}, { initializeWithValue: false });
 
-  const posthog = usePostHog()
+	const posthog = usePostHog();
 
-  const [result, setResult] = useState<ExecutionResult>()
-  const [messages, setMessages] = useState<Message[]>([])
-  const [fragment, setFragment] = useState<DeepPartial<FragmentSchema>>()
-  const [currentTab, setCurrentTab] = useState<'code' | 'fragment'>('code')
-  const [isPreviewLoading, setIsPreviewLoading] = useState(false)
-  const [isAuthDialogOpen, setAuthDialog] = useState(false)
-  const [authView, setAuthView] = useState<AuthViewType>('sign_in')
-  const [isRateLimited, setIsRateLimited] = useState(false)
-  const { session, apiKey } = useAuth(setAuthDialog, setAuthView)
+	const [result, setResult] = useState<ExecutionResult>();
+	const [messages, setMessages] = useState<Message[]>([]);
+	const [fragment, setFragment] = useState<DeepPartial<FragmentSchema>>();
+	const [currentTab, setCurrentTab] = useState<"code" | "fragment">("code");
+	const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+	const [isAuthDialogOpen, setAuthDialog] = useState(false);
+	const [authView, setAuthView] = useState<AuthViewType>("sign_in");
+	const [isRateLimited, setIsRateLimited] = useState(false);
+	const [models, setModels] = useState<LLMModel[]>([]);
+	const [isLoadingModels, setIsLoadingModels] = useState(true);
+	const [modelLoadError, setModelLoadError] = useState<string>();
+	const { session, apiKey } = useAuth(setAuthDialog, setAuthView);
 
-  const currentModel = modelsList.models.find(
-    (model) => model.id === languageModel.model,
-  )
-  const currentTemplate =
-    selectedTemplate === 'auto'
-      ? templates
-      : { [selectedTemplate]: templates[selectedTemplate] }
-  const lastMessage = messages[messages.length - 1]
+	const [chats, setChats] = useState<ChatSession[]>([]);
+	const [activeChatId, setActiveChatId] = useState<string | null>(null);
+	const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  const { object, submit, isLoading, stop, error } = useObject({
-    api: '/api/chat',
-    schema,
-    onError: (error: Error) => {
-      if (error.message.includes('request limit')) {
-        setIsRateLimited(true)
-      }
-    },
-    onFinish: async ({
-      object: fragment,
-      error,
-    }: {
-      object: DeepPartial<FragmentSchema> | undefined
-      error: Error | undefined
-    }) => {
-      if (!error) {
-        // send it to /api/sandbox
-        console.log('fragment', fragment)
-        setIsPreviewLoading(true)
-        posthog.capture('fragment_generated', {
-          template: fragment?.template,
-        })
+	// Load chat history on mount
+	useEffect(() => {
+		setChats(loadChats());
+	}, []);
 
-        const response = await fetch('/api/sandbox', {
-          method: 'POST',
-          body: JSON.stringify({
-            fragment,
-            userID: session?.user?.id,
-            apiKey,
-          }),
-        })
+	// Autosave current chat whenever messages change
+	useEffect(() => {
+		if (messages.length === 0) return;
+		const id = activeChatId || createChatId();
+		if (!activeChatId) {
+			setActiveChatId(id);
+		}
+		const session: ChatSession = {
+			id,
+			title: generateChatTitle(messages),
+			messages,
+			timestamp: Date.now(),
+			fragment,
+			result,
+		};
+		saveChat(session);
+		setChats((prev) => {
+			const index = prev.findIndex((c) => c.id === id);
+			if (index >= 0) {
+				const next = [...prev];
+				next[index] = session;
+				return next;
+			}
+			return [...prev, session];
+		});
+	}, [activeChatId, messages, fragment, result]);
 
-        const result = await response.json()
-        console.log('result', result)
-        posthog.capture('sandbox_created', { url: result.url })
+	function handleSelectChat(chat: ChatSession) {
+		setMessages(chat.messages);
+		setFragment(chat.fragment);
+		setResult(chat.result as ExecutionResult | undefined);
+		setActiveChatId(chat.id);
+		if (chat.fragment) {
+			setCurrentTab("fragment");
+		} else {
+			setCurrentTab("code");
+		}
+		setChatInput("");
+		setFiles([]);
+	}
 
-        setResult(result)
-        setCurrentPreview({ fragment, result })
-        setMessage({ result })
-        setCurrentTab('fragment')
-        setIsPreviewLoading(false)
-      }
-    },
-  })
+	function handleNewChat() {
+		stop();
+		setChatInput("");
+		setFiles([]);
+		setMessages([]);
+		setFragment(undefined);
+		setResult(undefined);
+		setCurrentTab("code");
+		setIsPreviewLoading(false);
+		setActiveChatId(null);
+	}
 
-  useEffect(() => {
-    if (object) {
-      setFragment(object)
-      const content: Message['content'] = [
-        { type: 'text', text: object.commentary || '' },
-        { type: 'code', text: object.code || '' },
-      ]
+	function handleDeleteChat(id: string) {
+		deleteChatFromStorage(id);
+		setChats((prev) => prev.filter((c) => c.id !== id));
+		if (activeChatId === id) {
+			handleNewChat();
+		}
+	}
 
-      if (!lastMessage || lastMessage.role !== 'assistant') {
-        addMessage({
-          role: 'assistant',
-          content,
-          object,
-        })
-      }
+	const currentModel = models.find((model) => model.id === languageModel.model);
+	const currentTemplate =
+		selectedTemplate === "auto"
+			? templates
+			: { [selectedTemplate]: templates[selectedTemplate] };
 
-      if (lastMessage && lastMessage.role === 'assistant') {
-        setMessage({
-          content,
-          object,
-        })
-      }
-    }
-  }, [object])
+	const { object, submit, isLoading, stop, error } = useObject({
+		api: "/api/chat",
+		schema,
+		onError: (error: Error) => {
+			if (error.message.includes("request limit")) {
+				setIsRateLimited(true);
+			}
+		},
+		onFinish: async ({
+			object: fragment,
+			error,
+		}: {
+			object: DeepPartial<FragmentSchema> | undefined;
+			error: Error | undefined;
+		}) => {
+			if (!error) {
+				// send it to /api/sandbox
+				console.log("fragment", fragment);
+				setIsPreviewLoading(true);
+				posthog.capture("fragment_generated", {
+					template: fragment?.template,
+				});
 
-  useEffect(() => {
-    if (error) stop()
-  }, [error])
+				const response = await fetch("/api/sandbox", {
+					method: "POST",
+					body: JSON.stringify({
+						fragment,
+						userID: session?.user?.id,
+						apiKey,
+					}),
+				});
 
-  function setMessage(message: Partial<Message>, index?: number) {
-    setMessages((previousMessages) => {
-      const updatedMessages = [...previousMessages]
-      updatedMessages[index ?? previousMessages.length - 1] = {
-        ...previousMessages[index ?? previousMessages.length - 1],
-        ...message,
-      }
+				const result = await response.json();
+				console.log("result", result);
+				posthog.capture("sandbox_created", { url: result.url });
 
-      return updatedMessages
-    })
-  }
+				setResult(result);
+				setCurrentPreview({ fragment, result });
+				setMessage({ result });
+				setCurrentTab("fragment");
+				setIsPreviewLoading(false);
+			}
+		},
+	});
 
-  async function handleSubmitAuth(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault()
+	useEffect(() => {
+		const controller = new AbortController();
+		const timeout = setTimeout(async () => {
+			setIsLoadingModels(true);
 
-    if (!session) {
-      return setAuthDialog(true)
-    }
+			try {
+				const response = await fetch("/api/models", {
+					method: "POST",
+					body: JSON.stringify({
+						apiKeys: providerApiKeys,
+						baseURL: languageModel.baseURL,
+					}),
+					signal: controller.signal,
+				});
 
-    if (isLoading) {
-      stop()
-    }
+				if (!response.ok) {
+					throw new Error("Unable to load models");
+				}
 
-    const content: Message['content'] = [{ type: 'text', text: chatInput }]
-    const images = await toMessageImage(files)
+				const data = (await response.json()) as ModelsResponse;
+				const configuredErrors = (data.statuses ?? []).filter(
+					(status) => status.configured && status.error,
+				);
 
-    if (images.length > 0) {
-      images.forEach((image) => {
-        content.push({ type: 'image', image })
-      })
-    }
+				setModels(data.models ?? []);
+				setModelLoadError(
+					configuredErrors.length > 0
+						? "Some configured providers could not return models."
+						: undefined,
+				);
+			} catch (error) {
+				if (!controller.signal.aborted) {
+					setModels([]);
+					setModelLoadError(
+						error instanceof Error ? error.message : "Unable to load models",
+					);
+				}
+			} finally {
+				if (!controller.signal.aborted) {
+					setIsLoadingModels(false);
+				}
+			}
+		}, 400);
 
-    const updatedMessages = addMessage({
-      role: 'user',
-      content,
-    })
+		return () => {
+			clearTimeout(timeout);
+			controller.abort();
+		};
+	}, [providerApiKeys, languageModel.baseURL]);
 
-    submit({
-      userID: session?.user?.id,
-      messages: toAISDKMessages(updatedMessages),
-      template: currentTemplate,
-      model: currentModel,
-      config: languageModel,
-    })
+	useEffect(() => {
+		if (models.length === 0) return;
+		if (
+			languageModel.model &&
+			models.some((model) => model.id === languageModel.model)
+		) {
+			return;
+		}
 
-    setChatInput('')
-    setFiles([])
-    setCurrentTab('code')
+		setLanguageModel({ ...languageModel, model: models[0].id });
+	}, [models, languageModel, setLanguageModel]);
 
-    posthog.capture('chat_submit', {
-      template: selectedTemplate,
-      model: languageModel.model,
-    })
-  }
+	useEffect(() => {
+		if (!object) return;
 
-  function retry() {
-    submit({
-      userID: session?.user?.id,
-      messages: toAISDKMessages(messages),
-      template: currentTemplate,
-      model: currentModel,
-      config: languageModel,
-    })
-  }
+		setFragment(object);
+		const content: Message["content"] = [
+			{ type: "text", text: object.commentary || "" },
+			{ type: "code", text: object.code || "" },
+		];
 
-  function addMessage(message: Message) {
-    setMessages((previousMessages) => [...previousMessages, message])
-    return [...messages, message]
-  }
+		setMessages((previousMessages) => {
+			const lastIndex = previousMessages.length - 1;
+			const lastMessage = previousMessages[lastIndex];
 
-  function handleSaveInputChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
-    setChatInput(e.target.value)
-  }
+			if (lastMessage?.role === "assistant") {
+				const updatedMessages = [...previousMessages];
+				updatedMessages[lastIndex] = {
+					...lastMessage,
+					content,
+					object,
+				};
+				return updatedMessages;
+			}
 
-  function handleFileChange(change: SetStateAction<File[]>) {
-    setFiles(change)
-  }
+			return [...previousMessages, { role: "assistant", content, object }];
+		});
+	}, [object]);
 
-  function logout() {
-    supabase
-      ? supabase.auth.signOut()
-      : console.warn('Supabase is not initialized')
-  }
+	useEffect(() => {
+		if (error) stop();
+	}, [error, stop]);
 
-  function handleLanguageModelChange(e: LLMModelConfig) {
-    setLanguageModel({ ...languageModel, ...e })
-  }
+	function setMessage(message: Partial<Message>, index?: number) {
+		setMessages((previousMessages) => {
+			const updatedMessages = [...previousMessages];
+			updatedMessages[index ?? previousMessages.length - 1] = {
+				...previousMessages[index ?? previousMessages.length - 1],
+				...message,
+			};
 
-  function handleSocialClick(target: 'github' | 'x' | 'discord') {
-    if (target === 'github') {
-      window.open('https://github.com/e2b-dev/fragments', '_blank')
-    } else if (target === 'x') {
-      window.open('https://x.com/e2b_dev', '_blank')
-    } else if (target === 'discord') {
-      window.open('https://discord.gg/U7KEcGErtQ', '_blank')
-    }
+			return updatedMessages;
+		});
+	}
 
-    posthog.capture(`${target}_click`)
-  }
+	async function handleSubmitAuth(e: React.FormEvent<HTMLFormElement>) {
+		e.preventDefault();
 
-  function handleClearChat() {
-    stop()
-    setChatInput('')
-    setFiles([])
-    setMessages([])
-    setFragment(undefined)
-    setResult(undefined)
-    setCurrentTab('code')
-    setIsPreviewLoading(false)
-  }
+		if (!session) {
+			return setAuthDialog(true);
+		}
 
-  function setCurrentPreview(preview: {
-    fragment: DeepPartial<FragmentSchema> | undefined
-    result: ExecutionResult | undefined
-  }) {
-    setFragment(preview.fragment)
-    setResult(preview.result)
-  }
+		if (isLoading) {
+			stop();
+		}
 
-  function handleUndo() {
-    setMessages((previousMessages) => [...previousMessages.slice(0, -2)])
-    setCurrentPreview({ fragment: undefined, result: undefined })
-  }
+		if (!currentModel) {
+			setModelLoadError("Add an API key and select a returned model first.");
+			return;
+		}
 
-  return (
-    <main className="flex min-h-screen max-h-screen">
-      {supabase && (
-        <AuthDialog
-          open={isAuthDialogOpen}
-          setOpen={setAuthDialog}
-          view={authView}
-          supabase={supabase}
-        />
-      )}
-      <div className="grid w-full md:grid-cols-2">
-        <div
-          className={`flex flex-col w-full max-h-full max-w-[800px] mx-auto px-4 overflow-auto ${fragment ? 'col-span-1' : 'col-span-2'}`}
-        >
-          <NavBar
-            session={session}
-            showLogin={() => setAuthDialog(true)}
-            signOut={logout}
-            onSocialClick={handleSocialClick}
-            onClear={handleClearChat}
-            canClear={messages.length > 0}
-            canUndo={messages.length > 1 && !isLoading}
-            onUndo={handleUndo}
-          />
-          <Chat
-            messages={messages}
-            isLoading={isLoading}
-            setCurrentPreview={setCurrentPreview}
-          />
-          <ChatInput
-            retry={retry}
-            isErrored={error !== undefined}
-            isLoading={isLoading}
-            isRateLimited={isRateLimited}
-            stop={stop}
-            input={chatInput}
-            handleInputChange={handleSaveInputChange}
-            handleSubmit={handleSubmitAuth}
-            isMultiModal={currentModel?.multiModal || false}
-            files={files}
-            handleFileChange={handleFileChange}
-          >
-            <ChatPicker
-              templates={templates}
-              selectedTemplate={selectedTemplate}
-              onSelectedTemplateChange={setSelectedTemplate}
-              models={modelsList.models}
-              languageModel={languageModel}
-              onLanguageModelChange={handleLanguageModelChange}
-            />
-            <ChatSettings
-              languageModel={languageModel}
-              onLanguageModelChange={handleLanguageModelChange}
-              apiKeyConfigurable={!process.env.NEXT_PUBLIC_NO_API_KEY_INPUT}
-              baseURLConfigurable={!process.env.NEXT_PUBLIC_NO_BASE_URL_INPUT}
-            />
-          </ChatInput>
-        </div>
-        <Preview
-          apiKey={apiKey}
-          selectedTab={currentTab}
-          onSelectedTabChange={setCurrentTab}
-          isChatLoading={isLoading}
-          isPreviewLoading={isPreviewLoading}
-          fragment={fragment}
-          result={result as ExecutionResult}
-          onClose={() => setFragment(undefined)}
-        />
-      </div>
-    </main>
-  )
+		const content: Message["content"] = [{ type: "text", text: chatInput }];
+		const images = await toMessageImage(files);
+
+		if (images.length > 0) {
+			images.forEach((image) => {
+				content.push({ type: "image", image });
+			});
+		}
+
+		const updatedMessages = addMessage({
+			role: "user",
+			content,
+		});
+
+		submit({
+			userID: session?.user?.id,
+			messages: toAISDKMessages(updatedMessages),
+			template: currentTemplate,
+			model: currentModel,
+			config: getRequestModelConfig(),
+		});
+
+		setChatInput("");
+		setFiles([]);
+		setCurrentTab("code");
+
+		posthog.capture("chat_submit", {
+			template: selectedTemplate,
+			model: languageModel.model,
+		});
+	}
+
+	function retry() {
+		if (!currentModel) {
+			setModelLoadError("Add an API key and select a returned model first.");
+			return;
+		}
+
+		submit({
+			userID: session?.user?.id,
+			messages: toAISDKMessages(messages),
+			template: currentTemplate,
+			model: currentModel,
+			config: getRequestModelConfig(),
+		});
+	}
+
+	function addMessage(message: Message) {
+		setMessages((previousMessages) => [...previousMessages, message]);
+		return [...messages, message];
+	}
+
+	function handleSaveInputChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
+		setChatInput(e.target.value);
+	}
+
+	function logout() {
+		supabase
+			? supabase.auth.signOut()
+			: console.warn("Supabase is not initialized");
+	}
+
+	function handleLanguageModelChange(e: LLMModelConfig) {
+		setLanguageModel({ ...languageModel, ...e });
+	}
+
+	function getRequestModelConfig() {
+		const providerApiKey = currentModel?.providerId
+			? providerApiKeys[currentModel.providerId]
+			: undefined;
+
+		return {
+			...languageModel,
+			apiKey: providerApiKey || languageModel.apiKey,
+		};
+	}
+
+	function handleSocialClick(target: "github" | "x" | "discord") {
+		if (target === "github") {
+			window.open("https://github.com/e2b-dev/fragments", "_blank");
+		} else if (target === "x") {
+			window.open("https://x.com/e2b_dev", "_blank");
+		} else if (target === "discord") {
+			window.open("https://discord.gg/U7KEcGErtQ", "_blank");
+		}
+
+		posthog.capture(`${target}_click`);
+	}
+
+	function handleClearChat() {
+		stop();
+		setChatInput("");
+		setFiles([]);
+		setMessages([]);
+		setFragment(undefined);
+		setResult(undefined);
+		setCurrentTab("code");
+		setIsPreviewLoading(false);
+	}
+
+	function setCurrentPreview(preview: {
+		fragment: DeepPartial<FragmentSchema> | undefined;
+		result: ExecutionResult | undefined;
+	}) {
+		setFragment(preview.fragment);
+		setResult(preview.result);
+	}
+
+	function handleUndo() {
+		setMessages((previousMessages) => [...previousMessages.slice(0, -2)]);
+		setCurrentPreview({ fragment: undefined, result: undefined });
+	}
+
+	return (
+		<main className="flex min-h-screen max-h-screen">
+			{supabase && (
+				<AuthDialog
+					open={isAuthDialogOpen}
+					setOpen={setAuthDialog}
+					view={authView}
+					supabase={supabase}
+				/>
+			)}
+			<div className="flex w-full">
+				<ChatSidebar
+					chats={chats}
+					activeChatId={activeChatId}
+					onSelectChat={handleSelectChat}
+					onDeleteChat={handleDeleteChat}
+					onNewChat={handleNewChat}
+					isOpen={sidebarOpen}
+					onToggle={() => setSidebarOpen(!sidebarOpen)}
+				/>
+				<div className="grid flex-1 md:grid-cols-2 min-w-0">
+					<div
+						className={`flex flex-col w-full max-h-full max-w-[800px] mx-auto px-4 overflow-auto ${fragment ? "col-span-1" : "col-span-2"}`}
+					>
+						<NavBar
+							session={session}
+							showLogin={() => setAuthDialog(true)}
+							signOut={logout}
+							onSocialClick={handleSocialClick}
+							onClear={handleClearChat}
+							canClear={messages.length > 0}
+							canUndo={messages.length > 1 && !isLoading}
+							onUndo={handleUndo}
+						/>
+						<Chat
+							messages={messages}
+							isLoading={isLoading}
+							setCurrentPreview={setCurrentPreview}
+						/>
+						<ChatInput
+							retry={retry}
+							isErrored={error !== undefined}
+							isLoading={isLoading}
+							isRateLimited={isRateLimited}
+							stop={stop}
+							input={chatInput}
+							handleInputChange={handleSaveInputChange}
+							handleSubmit={handleSubmitAuth}
+							isMultiModal={currentModel?.multiModal || false}
+							files={files}
+							handleFileChange={setFiles}
+						>
+							<ChatPicker
+								templates={templates}
+								selectedTemplate={selectedTemplate}
+								onSelectedTemplateChange={setSelectedTemplate}
+								models={models}
+								languageModel={languageModel}
+								isLoadingModels={isLoadingModels}
+								onLanguageModelChange={handleLanguageModelChange}
+							/>
+							<ChatSettings
+								models={models}
+								providers={MODEL_PROVIDERS}
+								languageModel={languageModel}
+								providerApiKeys={providerApiKeys}
+								isLoadingModels={isLoadingModels}
+								modelLoadError={modelLoadError}
+								onLanguageModelChange={handleLanguageModelChange}
+								onProviderApiKeysChange={setProviderApiKeys}
+								apiKeyConfigurable={!process.env.NEXT_PUBLIC_NO_API_KEY_INPUT}
+								baseURLConfigurable={!process.env.NEXT_PUBLIC_NO_BASE_URL_INPUT}
+							/>
+						</ChatInput>
+					</div>
+				<Preview
+					apiKey={apiKey}
+					selectedTab={currentTab}
+					onSelectedTabChange={setCurrentTab}
+					isChatLoading={isLoading}
+					isPreviewLoading={isPreviewLoading}
+					fragment={fragment}
+					result={result as ExecutionResult}
+					onClose={() => setFragment(undefined)}
+				/>
+			</div>
+			</div>
+		</main>
+	);
 }

@@ -1,0 +1,18 @@
+import { Template } from 'e2b'
+
+export const template = Template()
+  .fromImage('node:21-slim')
+  .setUser('root')
+  .setWorkdir('/')
+  .runCmd('apt-get update && apt-get install -y curl && apt-get clean && rm -rf /var/lib/apt/lists/*')
+  .copy('compile_page.sh', '/compile_page.sh')
+  .runCmd('chmod +x /compile_page.sh')
+  .setWorkdir('/home/user/nextjs-app')
+  .runCmd('npx create-next-app@14.2.20 . --ts --tailwind --no-eslint --import-alias "@/*" --use-npm --no-app --no-src-dir')
+  .copy('_app.tsx', 'pages/_app.tsx')
+  .runCmd('npx shadcn@2.1.7 init -d')
+  .runCmd('npx shadcn@2.1.7 add --all')
+  .runCmd('npm install posthog-js')
+  .runCmd('mv /home/user/nextjs-app/* /home/user/ && rm -rf /home/user/nextjs-app')
+  .setUser('user')
+  .setStartCmd('sudo /compile_page.sh', 'sleep 20')

@@ -1,6 +1,10 @@
 "use client"
 
-import { RepoBanner } from './repo-banner'
+import { ArrowUp, Paperclip, Square, X } from 'lucide-react'
+import Image from 'next/image'
+import type { SetStateAction } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import TextareaAutosize from 'react-textarea-autosize'
 import { Button } from '@/components/ui/button'
 import {
   Tooltip,
@@ -9,9 +13,6 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { isFileInArray } from '@/lib/utils'
-import { ArrowUp, Paperclip, Square, X } from 'lucide-react'
-import { SetStateAction, useEffect, useMemo, useState } from 'react'
-import TextareaAutosize from 'react-textarea-autosize'
 
 export function ChatInput({
   retry,
@@ -103,26 +104,18 @@ export function ChatInput({
     }
   }
 
-  const filePreview = useMemo(() => {
-    if (files.length === 0) return null
-    return Array.from(files).map((file) => {
-      return (
-        <div className="relative" key={file.name}>
-          <span
-            onClick={() => handleFileRemove(file)}
-            className="absolute top-[-8] right-[-8] bg-muted rounded-full p-1"
-          >
-            <X className="h-3 w-3 cursor-pointer" />
-          </span>
-          <img
-            src={URL.createObjectURL(file)}
-            alt={file.name}
-            className="rounded-xl w-10 h-10 object-cover"
-          />
-        </div>
-      )
-    })
-  }, [files])
+  const filePreview = useMemo(
+    () => files.map((file) => ({ file, src: URL.createObjectURL(file) })),
+    [files],
+  )
+
+  useEffect(() => {
+    return () => {
+      for (const preview of filePreview) {
+        URL.revokeObjectURL(preview.src)
+      }
+    }
+  }, [filePreview])
 
   function onEnter(e: React.KeyboardEvent<HTMLFormElement>) {
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -139,7 +132,7 @@ export function ChatInput({
     if (!isMultiModal) {
       handleFileChange([])
     }
-  }, [isMultiModal])
+  }, [handleFileChange, isMultiModal])
 
   return (
     <form
@@ -165,6 +158,7 @@ export function ChatInput({
               : 'An unexpected error has occurred.'}
           </span>
           <button
+            type="button"
             className={`px-2 py-1 rounded-sm ${
               isRateLimited ? 'bg-orange-400/20' : 'bg-red-400/20'
             }`}
@@ -175,7 +169,6 @@ export function ChatInput({
         </div>
       )}
       <div className="relative">
-        <RepoBanner className="absolute bottom-full inset-x-2 translate-y-1 z-0 pb-2" />
         <div className={`shadow-md rounded-2xl relative z-10 bg-background border ${
           dragActive 
             ? 'before:absolute before:inset-0 before:rounded-2xl before:border-2 before:border-dashed before:border-primary' 
@@ -225,7 +218,26 @@ export function ChatInput({
                   <TooltipContent>Add attachments</TooltipContent>
                 </Tooltip>
               </TooltipProvider>
-              {files.length > 0 && filePreview}
+              {filePreview.map(({ file, src }) => (
+                <div className="relative" key={`${file.name}-${file.lastModified}`}>
+                  <button
+                    type="button"
+                    onClick={() => handleFileRemove(file)}
+                    className="absolute top-[-8] right-[-8] bg-muted rounded-full p-1"
+                    aria-label={`Remove ${file.name}`}
+                  >
+                    <X className="h-3 w-3 cursor-pointer" />
+                  </button>
+                  <Image
+                    src={src}
+                    alt={file.name}
+                    width={40}
+                    height={40}
+                    unoptimized={true}
+                    className="rounded-xl w-10 h-10 object-cover"
+                  />
+                </div>
+              ))}
             </div>
             <div>
               {!isLoading ? (
@@ -271,7 +283,7 @@ export function ChatInput({
       </div>
       <p className="text-xs text-muted-foreground mt-2 text-center">
         Fragments is an open-source project made by{' '}
-        <a href="https://e2b.dev" target="_blank" className="text-[#ff8800]">
+        <a href="https://e2b.dev" target="_blank" rel="noreferrer" className="text-[#ff8800]">
           ✶ E2B
         </a>
       </p>

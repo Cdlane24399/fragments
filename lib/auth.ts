@@ -1,7 +1,7 @@
-import { supabase } from './supabase'
-import { Session } from '@supabase/supabase-js'
+import type { Session } from '@supabase/supabase-js'
 import { usePostHog } from 'posthog-js/react'
-import { useState, useEffect } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { supabase } from './supabase'
 
 export type AuthViewType =
   | 'sign_in'
@@ -11,13 +11,19 @@ export type AuthViewType =
   | 'update_password'
   | 'verify_otp'
 
-interface UserTeam {
-  id: string
-  name: string
+interface TeamApiKey {
+  api_key: string
+}
+
+interface UserTeamRow {
   is_default: boolean
-  tier: string
-  email: string
-  team_api_keys: { api_key: string }[]
+  teams: {
+    id: string
+    name: string
+    tier: string
+    email: string
+    team_api_keys: TeamApiKey[]
+  }
 }
 
 export async function getUserAPIKey(session: Session) {
@@ -31,13 +37,11 @@ export async function getUserAPIKey(session: Session) {
     )
     .eq('user_id', session?.user.id)
 
-  const teams = userTeams?.map((userTeam: any) => {
+  const teams = (userTeams as UserTeamRow[] | null)?.map((userTeam) => {
     return {
       ...userTeam.teams,
       is_default: userTeam.is_default,
-      apiKeys: userTeam.teams.team_api_keys.map(
-        (apiKey: any) => apiKey.api_key,
-      ),
+      apiKeys: userTeam.teams.team_api_keys.map((apiKey) => apiKey.api_key),
     }
   })
 
@@ -52,7 +56,7 @@ export function useAuth(
   const [session, setSession] = useState<Session | null>(null)
   const [apiKey, setApiKey] = useState<string | undefined>(undefined)
   const posthog = usePostHog()
-  let recovery = false
+  const recoveryRef = useRef(false)
 
   useEffect(() => {
     if (!supabase) {
@@ -83,16 +87,16 @@ export function useAuth(
       setSession(session)
 
       if (_event === 'PASSWORD_RECOVERY') {
-        recovery = true
+        recoveryRef.current = true
         setAuthView('update_password')
         setAuthDialog(true)
       }
 
-      if (_event === 'USER_UPDATED' && recovery) {
-        recovery = false
+      if (_event === 'USER_UPDATED' && recoveryRef.current) {
+        recoveryRef.current = false
       }
 
-      if (_event === 'SIGNED_IN' && !recovery) {
+      if (_event === 'SIGNED_IN' && !recoveryRef.current) {
         setAuthDialog(false)
         getUserAPIKey(session as Session).then(setApiKey)
         if (!session?.user.user_metadata.is_fragments_user) {
@@ -116,7 +120,7 @@ export function useAuth(
     })
 
     return () => subscription.unsubscribe()
-  }, [])
+  }, [posthog, setAuthDialog, setAuthView])
 
   return {
     session,

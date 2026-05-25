@@ -104,8 +104,9 @@ KV_REST_API_URL=
 KV_REST_API_TOKEN=
 
 # Supabase (auth)
-SUPABASE_URL=
-SUPABASE_ANON_KEY=
+NEXT_PUBLIC_ENABLE_SUPABASE=
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
 
 # PostHog (analytics)
 NEXT_PUBLIC_POSTHOG_KEY=
@@ -199,41 +200,19 @@ npm run build
 
 4. Optionally, add a new logo under [public/thirdparty/templates](public/thirdparty/templates)
 
-### Adding custom LLM models
-
-1. Open [lib/models.json](lib/models.ts) in your code editor.
-
-2. Add a new entry to the models list:
-
-    ```json
-    {
-      "id": "mistral-large",
-      "name": "Mistral Large",
-      "provider": "Ollama",
-      "providerId": "ollama"
-    }
-    ```
-
-    Where id is the model id, name is the model name (visible in the UI), provider is the provider name and providerId is the provider tag (see [adding providers](#adding-custom-llm-providers) below).
-
 ### Adding custom LLM providers
 
-1. Open [lib/models.ts](lib/models.ts) in your code editor.
+Models are discovered from the configured provider API keys instead of a static
+model-id list.
 
-2. Add a new entry to the `providerConfigs` list:
+1. Open [lib/model-providers.ts](lib/model-providers.ts) in your code editor.
 
-    Example for fireworks:
+2. Add provider metadata and the model-listing API shape.
+
+3. Open [lib/models.ts](lib/models.ts) and add a runtime client entry:
 
     ```ts
     fireworks: () => createOpenAI({ apiKey: apiKey || process.env.FIREWORKS_API_KEY, baseURL: baseURL || 'https://api.fireworks.ai/inference/v1' })(modelNameString),
-    ```
-
-3. Optionally, adjust the default structured output mode in the `getDefaultMode` function:
-
-    ```ts
-    if (providerId === 'fireworks') {
-      return 'json'
-    }
     ```
 
 4. Optionally, add a new logo under [public/thirdparty/logos](public/thirdparty/logos)

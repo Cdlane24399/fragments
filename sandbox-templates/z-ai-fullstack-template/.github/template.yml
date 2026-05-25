@@ -1,0 +1,11 @@
+name: Z.ai Full-Stack Next.js Template
+description: A production-ready Next.js template with TypeScript, Tailwind CSS, shadcn/ui, Prisma, and more
+tags:
+  - nextjs
+  - typescript
+  - tailwind
+  - shadcn-ui
+  - prisma
+  - react
+  - fullstack
+  - template
