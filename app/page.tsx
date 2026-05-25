@@ -17,7 +17,7 @@ import { supabase } from '@/lib/supabase'
 import templates, { TemplateId } from '@/lib/templates'
 import { ExecutionResult } from '@/lib/types'
 import { DeepPartial } from 'ai'
-import { experimental_useObject as useObject } from 'ai/react'
+import { experimental_useObject as useObject } from '@ai-sdk/react'
 import { usePostHog } from 'posthog-js/react'
 import { SetStateAction, useEffect, useState } from 'react'
 import { useLocalStorage } from 'usehooks-ts'
@@ -59,12 +59,18 @@ export default function Home() {
   const { object, submit, isLoading, stop, error } = useObject({
     api: '/api/chat',
     schema,
-    onError: (error) => {
+    onError: (error: Error) => {
       if (error.message.includes('request limit')) {
         setIsRateLimited(true)
       }
     },
-    onFinish: async ({ object: fragment, error }) => {
+    onFinish: async ({
+      object: fragment,
+      error,
+    }: {
+      object: DeepPartial<FragmentSchema> | undefined
+      error: Error | undefined
+    }) => {
       if (!error) {
         // send it to /api/sandbox
         console.log('fragment', fragment)

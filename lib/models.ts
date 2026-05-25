@@ -79,14 +79,3 @@ export function getModelClient(model: LLMModel, config: LLMModelConfig) {
 
   return createClient()
 }
-
-export function getDefaultMode(model: LLMModel) {
-  const { id: modelNameString, providerId } = model
-
-  // monkey patch fireworks
-  if (providerId === 'fireworks') {
-    return 'json'
-  }
-
-  return 'auto'
-}

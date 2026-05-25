@@ -1,11 +1,11 @@
 import { Duration } from '@/lib/duration'
-import { getModelClient, getDefaultMode } from '@/lib/models'
+import { getModelClient } from '@/lib/models'
 import { LLMModel, LLMModelConfig } from '@/lib/models'
 import { toPrompt } from '@/lib/prompt'
 import ratelimit from '@/lib/ratelimit'
 import { fragmentSchema as schema } from '@/lib/schema'
 import { Templates } from '@/lib/templates'
-import { streamObject, LanguageModel, CoreMessage } from 'ai'
+import { streamObject, LanguageModel, ModelMessage } from 'ai'
 
 export const maxDuration = 60
 
@@ -24,7 +24,7 @@ export async function POST(req: Request) {
     model,
     config,
   }: {
-    messages: CoreMessage[]
+    messages: ModelMessage[]
     userID: string
     template: Templates
     model: LLMModel
@@ -63,7 +63,6 @@ export async function POST(req: Request) {
     schema,
     system: toPrompt(template),
     messages,
-    mode: getDefaultMode(model),
     ...modelParams,
   })
 
