@@ -61,8 +61,12 @@ export async function POST(req: Request) {
   const stream = await streamObject({
     model: modelClient as LanguageModel,
     schema,
-    system: toPrompt(template),
+    instructions: toPrompt(template),
     messages,
+    abortSignal: req.signal,
+    onError: (event) => {
+      console.error('streamObject error', event.error)
+    },
     ...modelParams,
   })
 
